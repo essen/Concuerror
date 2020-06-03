@@ -1,8 +1,7 @@
 os: linux
 
-# temporarily, so that we can test with OTP versions prior to 19.x
 # without a dist: line, default in travis is xenial (Ubuntu 16.04)
-dist: trusty
+dist: xenial
 
 language: erlang
 
@@ -54,9 +53,9 @@ jobs:
     stage: basic
 
   # Minimal support for R16B03-1
-  - env: TEST="make tests-real"
-    otp_release: R16B03-1
-    stage: test
+  # env: TEST="make tests-real"
+  # otp_release: R16B03-1
+  # stage: test
 
   # Test website
   - env: TEST="make -C docs test"
@@ -84,15 +83,16 @@ otp_release:
   # README.md and the argument given to generate_version_hrl in
   # rebar.config
 
-  - 22.3
+  - 23.0.2
 
   # Last minor version of older OTP releases
 
+  - 22.3
   - 21.3
   - 20.3
   - 19.3
-  - 18.3
-  - 17.5
+  # 18.3
+  # 17.5
   # R16B03-1 is minimally supported (see matrix section)
 
 
