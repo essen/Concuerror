@@ -153,7 +153,7 @@ load_binary(Module, Filename, Beam, Instrumented) ->
     case ets:lookup(Instrumented, Module) =:= [] of
       true ->
         ets:insert(Instrumented, {Module, concuerror_instrumented}),
-        concuerror_instrumenter:instrument(Module, Core, Instrumented);
+        concuerror_instrumenter_old:instrument(Module, Core, Instrumented);
       false ->
         {Core, []}
     end,

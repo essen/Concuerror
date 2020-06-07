@@ -19,6 +19,9 @@
 %% Interface for resetting:
 -export([process_top_loop/1]).
 
+%% Interface to instrumenters:
+-export([is_unsafe/1]).
+
 -export([wrapper/4]).
 
 -export([explain_error/1]).
@@ -340,7 +343,7 @@ instrumented_call(Module, Name, Arity, Args, Location, Info)
   when is_atom(Module) ->
   case
     erlang:is_builtin(Module, Name, Arity) andalso
-    concuerror_instrumenter:is_unsafe({Module, Name, Arity})
+    is_unsafe({Module, Name, Arity})
   of
     true ->
       built_in(Module, Name, Arity, Args, Location, Info);
@@ -2504,3 +2507,98 @@ explain_error({unsupported_request, Name, Type}) ->
 location(F, L) ->
   Basename = filename:basename(F),
   io_lib:format(" (found in ~s line ~w)", [Basename, L]).
+
+%%------------------------------------------------------------------------------
+
+-spec is_unsafe({atom(), atom(), non_neg_integer()}) -> boolean().
+
+is_unsafe({erlang, exit, 2}) ->
+  true;
+is_unsafe({erlang, pid_to_list, 1}) ->
+  true; %% Instrumented for symbolic PIDs pretty printing.
+is_unsafe({erlang, fun_to_list, 1}) ->
+  true; %% Instrumented for fun pretty printing.
+is_unsafe({erlang, F, A}) ->
+  case
+    (erl_internal:guard_bif(F, A)
+     orelse erl_internal:arith_op(F, A)
+     orelse erl_internal:bool_op(F, A)
+     orelse erl_internal:comp_op(F, A)
+     orelse erl_internal:list_op(F, A)
+     orelse is_data_type_conversion_op(F))
+  of
+    true -> false;
+    false ->
+      StringF = atom_to_list(F),
+      not erl_safe(StringF)
+  end;
+is_unsafe({erts_internal, garbage_collect, _}) ->
+  false;
+is_unsafe({Safe, _, _})
+  when
+    Safe =:= binary
+    ; Safe =:= lists
+    ; Safe =:= maps
+    ; Safe =:= math
+    ; Safe =:= re
+    ; Safe =:= string
+    ; Safe =:= unicode
+    ->
+  false;
+is_unsafe({error_logger, warning_map, 0}) ->
+  false;
+is_unsafe({file, native_name_encoding, 0}) ->
+  false;
+is_unsafe({net_kernel, dflag_unicode_io, 1}) ->
+  false;
+is_unsafe({os, F, A})
+  when
+    {F, A} =:= {get_env_var, 1};
+    {F, A} =:= {getenv, 1}
+    ->
+  false;
+is_unsafe({prim_file, internal_name2native, 1}) ->
+  false;
+is_unsafe(_) ->
+  true.
+
+is_data_type_conversion_op(Name) ->
+  StringName = atom_to_list(Name),
+  case re:split(StringName, "_to_") of
+    [_] -> false;
+    [_, _] -> true
+  end.
+
+erl_safe("adler32"               ++ _) -> true;
+erl_safe("append"                ++ _) -> true;
+erl_safe("apply"                     ) -> true;
+erl_safe("bump_reductions"           ) -> true;
+erl_safe("crc32"                 ++ _) -> true;
+erl_safe("decode_packet"             ) -> true;
+erl_safe("delete_element"            ) -> true;
+erl_safe("delete_module"             ) -> true;
+erl_safe("dt_"                   ++ _) -> true;
+erl_safe("error"                     ) -> true;
+erl_safe("exit"                      ) -> true;
+erl_safe("external_size"             ) -> true;
+erl_safe("fun_info"              ++ _) -> true;
+erl_safe("function_exported"         ) -> true;
+erl_safe("garbage_collect"           ) -> true;
+erl_safe("get_module_info"           ) -> true;
+erl_safe("hibernate"                 ) -> false; %% Must be instrumented.
+erl_safe("insert_element"            ) -> true;
+erl_safe("iolist_size"               ) -> true;
+erl_safe("is_builtin"                ) -> true;
+erl_safe("load_nif"                  ) -> true;
+erl_safe("make_fun"                  ) -> true;
+erl_safe("make_tuple"                ) -> true;
+erl_safe("match_spec_test"           ) -> true;
+erl_safe("md5"                   ++ _) -> true;
+erl_safe("phash"                 ++ _) -> true;
+erl_safe("raise"                     ) -> true;
+erl_safe("seq_"                  ++ _) -> true;
+erl_safe("setelement"                ) -> true;
+erl_safe("split_binary"              ) -> true;
+erl_safe("subtract"                  ) -> true;
+erl_safe("throw"                     ) -> true;
+erl_safe(                           _) -> false.
