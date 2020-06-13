@@ -2594,6 +2594,7 @@ erl_safe("make_fun"                  ) -> true;
 erl_safe("make_tuple"                ) -> true;
 erl_safe("match_spec_test"           ) -> true;
 erl_safe("md5"                   ++ _) -> true;
+erl_safe("nif_error"                 ) -> true;
 erl_safe("phash"                 ++ _) -> true;
 erl_safe("raise"                     ) -> true;
 erl_safe("seq_"                  ++ _) -> true;
