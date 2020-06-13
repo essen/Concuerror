@@ -916,6 +916,8 @@ run_built_in(erlang, spawn, 3, [M, F, Args], Info) ->
   run_built_in(erlang, spawn_opt, 1, [{M, F, Args, []}], Info);
 run_built_in(erlang, spawn_link, 3, [M, F, Args], Info) ->
   run_built_in(erlang, spawn_opt, 1, [{M, F, Args, [link]}], Info);
+run_built_in(erlang, spawn_opt, 4, [Module, Name, Args, SpawnOpts], Info) ->
+  run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info);
 run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
   #concuerror_info{
      event = Event,
