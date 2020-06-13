@@ -12,7 +12,7 @@
 
 -define(ACTIVE_FLAGS, [?input, ?output]).
 
--define(DEBUG_FLAGS, lists:foldl(fun erlang:'bor'/2, 0, ?ACTIVE_FLAGS)).
+%% -define(DEBUG_FLAGS, lists:foldl(fun erlang:'bor'/2, 0, ?ACTIVE_FLAGS)).
 -include("concuerror.hrl").
 
 -spec instrument(module(), erl_syntax:forms(), concuerror_loader:instrumented())
@@ -41,6 +41,7 @@ instrument(Module, AbstractCode, Instrumented) ->
 
 %% Replace with form_list please.
 fold([], Arg, Acc) ->
+  %% io:format("Revert...~n"),
   {erl_syntax:revert_forms(lists:reverse(Acc)), Arg};
 fold([H|T], Arg, Acc) ->
   ArgIn = Arg#{var => erl_syntax_lib:variables(H)},
@@ -51,6 +52,7 @@ mapfold(Node, Acc) ->
   #{ file := File
    , instrumented := Instrumented
    , warnings := Warnings
+   , var := Var
    } = Acc,
   Type = erl_syntax:type(Node),
   NewNodeAndMaybeWarn =
@@ -65,14 +67,13 @@ mapfold(Node, Acc) ->
             Module = erl_syntax:module_qualifier_argument(Op),
             Name = erl_syntax:module_qualifier_body(Op),
             case is_safe(Module, Name, length(Args), Instrumented) of
-              has_load_nif -> {warn, Node, has_load_nif};
+              has_load_nif -> {newwarn, Node, has_load_nif};
               true -> Node;
               false ->
                 inspect(call, [Module, Name, LArgs], Node, Acc)
             end;
           atom -> Node;
           _ ->
-            io:format("THIS: ~p~n", [{OpType, Node}]),
             inspect(apply, [Op, LArgs], Node, Acc)
         end;
       infix_expr ->
@@ -87,13 +88,43 @@ mapfold(Node, Acc) ->
           _ -> Node
         end;
       receive_expr ->
-        Node;
+        %% io:format("BEF:~n~p~n", [Node]),
+        Clauses = erl_syntax:receive_expr_clauses(Node),
+        Timeout =
+          case erl_syntax:receive_expr_timeout(Node) of
+            none -> abstr(infinity);
+            T -> T
+          end,
+        Action =
+          case erl_syntax:receive_expr_action(Node) of
+            [] -> [abstr(ok)];
+            A -> A
+          end,
+        Fun = receive_matching_fun(Node),
+        %% io:format("~p~n", [Fun]),
+        %% erl_syntax:revert(Fun),
+        Call = inspect('receive', [Fun, Timeout], Node, Acc),
+        %% io:format("~p~n", [Call]),
+        %% erl_syntax:revert(Call),
+        %% Replace original timeout with a fresh variable to make it
+        %% skippable on demand.
+        TimeoutVar = erl_syntax:variable(erl_syntax_lib:new_variable_name(Var)),
+        Match = erl_syntax:match_expr(TimeoutVar, Call),
+        RecNode = erl_syntax:receive_expr(Clauses, TimeoutVar, Action),
+        %% io:format("~p~n", [RecNode]),
+        %% erl_syntax:revert(RecNode),
+        Block = erl_syntax:block_expr([Match, RecNode]),
+        %% io:format("~p~n", [Block]),
+        %% erl_syntax:revert(Block),
+        %% io:format("Good!~n"),
+        {newvar, Block, TimeoutVar};
       _ -> Node
     end,
-  {NewNode, NewWarnings} =
+  {NewNode, NewVar, NewWarnings} =
     case NewNodeAndMaybeWarn of
-      {warn, NT, W} -> {NT, [W|Warnings]};
-      _ -> {NewNodeAndMaybeWarn, Warnings}
+      {newwarn, NN, W} -> {NN, Var, [W|Warnings]};
+      {newvar, NN, V} -> {NN, sets:add_element(V, Var), Warnings};
+      _ -> {NewNodeAndMaybeWarn, Var, Warnings}
     end,
   NewFile =
     case Type of
@@ -108,64 +139,10 @@ mapfold(Node, Acc) ->
     Acc
     #{ file => NewFile
      , warnings => NewWarnings
+     , var => NewVar
      },
   {NewNode, NewAcc}.
 
-
-%% mapfold(Tree, {Instrumented, Var, Warnings}) ->
-%%   Type = cerl:type(Tree),
-%%   NewTreeAndMaybeWarn =
-%%     case Type of
-%%       apply ->
-%%         Op = cerl:apply_op(Tree),
-%%         case cerl:is_c_fname(Op) of
-%%           true -> Tree;
-%%           false ->
-%%             OldArgs = cerl:make_list(cerl:apply_args(Tree)),
-%%             inspect(apply, [Op, OldArgs], Tree)
-%%         end;
-%%       call ->
-%%         Module = cerl:call_module(Tree),
-%%         Name = cerl:call_name(Tree),
-%%         Args = cerl:call_args(Tree),
-%%         case is_safe(Module, Name, length(Args), Instrumented) of
-%%           has_load_nif -> {warn, Tree, has_load_nif};
-%%           true -> Tree;
-%%           false ->
-%%             inspect(call, [Module, Name, cerl:make_list(Args)], Tree)
-%%         end;
-%%       'receive' ->
-%%         Clauses = cerl:receive_clauses(Tree),
-%%         Timeout = cerl:receive_timeout(Tree),
-%%         Action = cerl:receive_action(Tree),
-%%         Fun = receive_matching_fun(Tree),
-%%         Call = inspect('receive', [Fun, Timeout], Tree),
-%%         case Timeout =:= cerl:c_atom(infinity) of
-%%           false ->
-%%             %% Replace original timeout with a fresh variable to make it
-%%             %% skippable on demand.
-%%             TimeoutVar = cerl:c_var(Var),
-%%             RecTree = cerl:update_c_receive(Tree, Clauses, TimeoutVar, Action),
-%%             cerl:update_tree(Tree, 'let', [[TimeoutVar], [Call], [RecTree]]);
-%%           true ->
-%%             %% Leave infinity timeouts unaffected, as the default code generated
-%%             %% by the compiler does not bind any additional variables in the
-%%             %% after clause.
-%%             cerl:update_tree(Tree, seq, [[Call], [Tree]])
-%%         end;
-%%       _ -> Tree
-%%     end,
-%%   {NewTree, NewWarnings} =
-%%     case NewTreeAndMaybeWarn of
-%%       {warn, NT, W} -> {NT, [W|Warnings]};
-%%       _ -> {NewTreeAndMaybeWarn, Warnings}
-%%     end,
-%%   NewVar =
-%%     case Type of
-%%       'receive' -> Var + 1;
-%%       _ -> Var
-%%     end,
-%%   {NewTree, {Instrumented, NewVar, NewWarnings}}.
 
 inspect(Tag, Args, Node, Acc) ->
   #{ file := File} = Acc,
@@ -181,25 +158,25 @@ inspect(Tag, Args, Node, Acc) ->
                             , abstr(PosInfo)]),
   erl_syntax:copy_attrs(Node, App).
 
-%% receive_matching_fun(Tree) ->
-%%   Msg = cerl:c_var(message),
-%%   Clauses = extract_patterns(cerl:receive_clauses(Tree)),
-%%   Body = cerl:update_tree(Tree, 'case', [[Msg], Clauses]),
-%%   cerl:update_tree(Tree, 'fun', [[Msg], [Body]]).
+receive_matching_fun(Node) ->
+  Clauses = erl_syntax:receive_expr_clauses(Node),
+  NewClauses = extract_patterns(Clauses),
+  erl_syntax:fun_expr(NewClauses).
 
-%% extract_patterns(Clauses) ->
-%%   extract_patterns(Clauses, []).
+extract_patterns(Clauses) ->
+  extract_patterns(Clauses, []).
 
-%% extract_patterns([], Acc) ->
-%%   Pat = [cerl:c_var(message)],
-%%   Guard = cerl:c_atom(true),
-%%   Body = cerl:c_atom(false),
-%%   lists:reverse([cerl:c_clause(Pat, Guard, Body)|Acc]);
-%% extract_patterns([Tree|Rest], Acc) ->
-%%   Body = cerl:c_atom(true),
-%%   Pats = cerl:clause_pats(Tree),
-%%   Guard = cerl:clause_guard(Tree),
-%%   extract_patterns(Rest, [cerl:update_c_clause(Tree, Pats, Guard, Body)|Acc]).
+extract_patterns([], Acc) ->
+  Pat = [erl_syntax:underscore()],
+  Guard = abstr(true),
+  Body = [abstr(false)],
+  lists:reverse([erl_syntax:clause(Pat, Guard, Body)|Acc]);
+extract_patterns([Node|Rest], Acc) ->
+  Body = [abstr(true)],
+  Pats = erl_syntax:clause_patterns(Node),
+  Guard = erl_syntax:clause_guard(Node),
+  NClause = erl_syntax:clause(Pats, Guard, Body),
+  extract_patterns(Rest, [erl_syntax:copy_attrs(Node, NClause)|Acc]).
 
 is_safe(Module, Name, Arity, Instrumented) ->
   case
